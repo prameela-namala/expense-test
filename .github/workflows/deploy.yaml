@@ -41,14 +41,15 @@ jobs:
       - name: Build Frontend Image
         run: |
           #docker build -t webapp-frontend:$IMAGE_TAG ./expense/frontend
-          docker build -t your-image-name -f expense/frontend/Dockerfile expense/frontend
+          docker build -t webapp-frontend:$IMAGE_TAG -f expense/frontend/Dockerfile expense/frontend
 
       # ----------------------------
       # BUILD BACKEND
       # ----------------------------
       - name: Build Backend Image
         run: |
-          docker build -t webapp-backend:$IMAGE_TAG ./backend
+          #docker build -t webapp-backend:$IMAGE_TAG ./backend
+          docker build -t webapp-backend:$IMAGE_TAG -f expense/backendend/Dockerfile expense/backend
 
       # ----------------------------
       # TAG FRONTEND IMAGE
