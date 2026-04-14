@@ -10,7 +10,7 @@ env:
   ENV: dev
   IMAGE_TAG: ${{ github.sha }}
 
-jobs:
+jobs:  
   build:
     runs-on: ubuntu-latest
 
