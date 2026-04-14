@@ -49,7 +49,7 @@ jobs:
       - name: Build Backend Image
         run: |
           #docker build -t webapp-backend:$IMAGE_TAG ./backend
-          docker build -t webapp-backend:$IMAGE_TAG -f expense/backendend/Dockerfile expense/backend
+          docker build -t webapp-backend:$IMAGE_TAG -f expense/backend/Dockerfile expense/backend
 
       # ----------------------------
       # TAG FRONTEND IMAGE
