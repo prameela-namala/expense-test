@@ -1,0 +1,119 @@
+name: CI/CD - ECS Fargate
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: us-east-1
+  ENV: dev
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Get ECR URI
+        run: |
+          echo "ECR_URI=$(aws ecr describe-repositories \
+          --repository-names webapp-dev \
+          --query 'repositories[0].repositoryUri' \
+          --output text)" >> $GITHUB_ENV     
+
+      # ----------------------------
+      # BUILD FRONTEND
+      # ----------------------------
+      - name: Build Frontend Image
+        run: |
+          docker build -t webapp-frontend:$IMAGE_TAG ./frontend
+
+      # ----------------------------
+      # BUILD BACKEND
+      # ----------------------------
+      - name: Build Backend Image
+        run: |
+          docker build -t webapp-backend:$IMAGE_TAG ./backend
+
+      # ----------------------------
+      # TAG FRONTEND IMAGE
+      # ----------------------------
+      - name: Tag Frontend Image
+        run: |
+          docker tag webapp-frontend:$IMAGE_TAG $ECR_URI:$IMAGE_TAG-frontend
+
+      # ----------------------------
+      # TAG BACKEND IMAGE
+      # ----------------------------
+      - name: Tag Backend Image
+        run: |
+          docker tag webapp-backend:$IMAGE_TAG $ECR_URI:$IMAGE_TAG-backend
+
+      # ----------------------------
+      # PUSH IMAGES
+      # ----------------------------
+      - name: Push Images
+        run: |
+          docker push $ECR_URI:$IMAGE_TAG-frontend
+          docker push $ECR_URI:$IMAGE_TAG-backend
+
+      # ----------------------------
+      # UPDATE TASK DEFINITION
+      # ----------------------------
+      - name: Register new Task Definition
+        id: taskdef
+        run: |
+          set -e
+
+          FRONTEND_IMAGE="$ECR_URI:$IMAGE_TAG-frontend"
+          BACKEND_IMAGE="$ECR_URI:$IMAGE_TAG-backend"
+
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition webapp-task-dev)
+
+          echo "$TASK_DEF" | jq --arg FE "$FRONTEND_IMAGE" --arg BE "$BACKEND_IMAGE" '
+            .taskDefinition
+            | .containerDefinitions[0].image = $FE
+            | .containerDefinitions[1].image = $BE
+            | del(
+                .taskDefinitionArn,
+                .revision,
+                .status,
+                .requiresAttributes,
+                .compatibilities,
+                .registeredAt,
+                .registeredBy
+              )
+          ' > new-task-def.json
+
+          TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json \
+            --query "taskDefinition.taskDefinitionArn" \
+            --output text)
+
+          echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
+
+      # ----------------------------
+      # DEPLOY
+      # ----------------------------
+      - name: Deploy to ECS
+        run: |
+          aws ecs update-service \
+            --cluster ecs-cluster-dev \
+            --service webapp-service-dev \
+            --task-definition $TASK_DEF_ARN \
+            --force-new-deployment
