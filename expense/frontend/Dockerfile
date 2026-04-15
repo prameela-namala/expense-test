@@ -42,8 +42,8 @@ RUN rm -rf /etc/nginx/nginx.conf && \
     touch /var/run/nginx.pid && \
     chown -R nginx:nginx /var/run/nginx.pid /run/nginx.pid
 
-COPY nginx.conf /etc/nginx/nginx.conf
-RUN chmod 644 /etc/nginx/nginx.conf
+# 🔥 FIX LINE ENDINGS HERE
+RUN sed -i 's/\r$//' /docker-entrypoint.d/*.sh
 
+COPY nginx.conf /etc/nginx/nginx.conf
 COPY code /usr/share/nginx/html
-RUN chmod -R 755 /usr/share/nginx/html
