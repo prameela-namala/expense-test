@@ -1,15 +1,16 @@
+
+
 # ----------------------------
-# ECR
+# ECR (SINGLE REPO)
 # ----------------------------
 resource "aws_ecr_repository" "app_repo" {
-  name                 = "webapp-dev"
-  image_tag_mutability = "MUTABLE"
+  name = "webapp-dev"
 }
 
 # ----------------------------
 # CLOUDWATCH LOGS
 # ----------------------------
-resource "aws_cloudwatch_log_group" "ecs_log_group" {
+resource "aws_cloudwatch_log_group" "logs" {
   name              = "/ecs/webapp-dev"
   retention_in_days = 7
 }
@@ -45,24 +46,31 @@ resource "aws_ecs_cluster" "cluster" {
 }
 
 # ----------------------------
-# SECURITY GROUP (TASK)
+# SECURITY GROUP
 # ----------------------------
 resource "aws_security_group" "task_sg" {
   name   = "task-sg-dev"
   vpc_id = data.aws_ssm_parameter.vpc_id.value
 
   ingress {
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    security_groups = [data.aws_ssm_parameter.alb_sg_id.value]
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   ingress {
-    from_port       = 8080
-    to_port         = 8080
-    protocol        = "tcp"
-    security_groups = [data.aws_ssm_parameter.alb_sg_id.value]
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -78,16 +86,12 @@ resource "aws_security_group" "task_sg" {
 # ----------------------------
 resource "aws_lb" "alb" {
   name               = "alb-dev"
-  internal           = false
   load_balancer_type = "application"
-  security_groups    = [data.aws_ssm_parameter.alb_sg_id.value]
+  security_groups    = [aws_security_group.task_sg.id]
 
   subnets = split(",", data.aws_ssm_parameter.public_subnet_ids.value)
 }
 
-# ----------------------------
-# TARGET GROUP
-# ----------------------------
 resource "aws_lb_target_group" "tg" {
   name        = "tg-dev"
   port        = 80
@@ -96,14 +100,10 @@ resource "aws_lb_target_group" "tg" {
   target_type = "ip"
 
   health_check {
-    path    = "/"
-    matcher = "200-399"
+    path = "/"
   }
 }
 
-# ----------------------------
-# LISTENER
-# ----------------------------
 resource "aws_lb_listener" "listener" {
   load_balancer_arn = aws_lb.alb.arn
   port              = 80
@@ -116,61 +116,76 @@ resource "aws_lb_listener" "listener" {
 }
 
 # ----------------------------
-# TASK DEFINITION (FRONTEND + BACKEND)
+# TASK DEFINITION (ALL IN ONE TASK)
 # ----------------------------
 resource "aws_ecs_task_definition" "task" {
   family                   = "webapp-task-dev"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "256"
-  memory                   = "512"
+  cpu                      = "512"
+  memory                   = "1024"
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
 
   container_definitions = jsonencode([
+
+    # FRONTEND
     {
-      name      = "frontend"
-      image     = "${aws_ecr_repository.app_repo.repository_url}:latest"
-      essential = true
+      name  = "frontend"
+      image = "${aws_ecr_repository.app_repo.repository_url}:frontend"
 
       portMappings = [{
         containerPort = 80
-        protocol      = "tcp"
       }]
-
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group         = aws_cloudwatch_log_group.ecs_log_group.name
-          awslogs-region        = var.region
-          awslogs-stream-prefix = "frontend"
-        }
-      }
     },
+
+    # BACKEND
     {
-      name      = "backend"
-      image     = "${aws_ecr_repository.app_repo.repository_url}:latest"
-      essential = true
+      name  = "backend"
+      image = "${aws_ecr_repository.app_repo.repository_url}:backend"
 
       portMappings = [{
         containerPort = 8080
-        protocol      = "tcp"
       }]
 
       environment = [
         {
           name  = "DB_HOST"
-          value = "mysql"
+          value = "127.0.0.1"
+        },
+        {
+          name  = "DB_USER"
+          value = "root"
+        },
+        {
+          name  = "DB_PASSWORD"
+          value = "root"
+        },
+        {
+          name  = "DB_NAME"
+          value = "expense"
         }
       ]
+    },
 
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group         = aws_cloudwatch_log_group.ecs_log_group.name
-          awslogs-region        = var.region
-          awslogs-stream-prefix = "backend"
+    # MYSQL
+    {
+      name  = "mysql"
+      image = "mysql:8"
+
+      portMappings = [{
+        containerPort = 3306
+      }]
+
+      environment = [
+        {
+          name  = "MYSQL_ROOT_PASSWORD"
+          value = "root"
+        },
+        {
+          name  = "MYSQL_DATABASE"
+          value = "expense"
         }
-      }
+      ]
     }
   ])
 }

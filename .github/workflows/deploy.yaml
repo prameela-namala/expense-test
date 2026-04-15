@@ -10,97 +10,104 @@ env:
   ENV: dev
   IMAGE_TAG: ${{ github.sha }}
 
-jobs:  
+jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
+      # ----------------------------
+      # CHECKOUT CODE
+      # ----------------------------
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Configure AWS
+      # ----------------------------
+      # AWS CONFIG
+      # ----------------------------
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to ECR
+      # ----------------------------
+      # LOGIN TO ECR
+      # ----------------------------
+      - name: Login to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Get ECR URI
+      # ----------------------------
+      # GET ECR REPO URI
+      # ----------------------------
+      - name: Set ECR URI
         run: |
           echo "ECR_URI=$(aws ecr describe-repositories \
           --repository-names webapp-dev \
           --query 'repositories[0].repositoryUri' \
-          --output text)" >> $GITHUB_ENV     
+          --output text)" >> $GITHUB_ENV
 
       # ----------------------------
       # BUILD FRONTEND
       # ----------------------------
       - name: Build Frontend Image
         run: |
-          #docker build -t webapp-frontend:$IMAGE_TAG ./expense/frontend
-          docker build -t webapp-frontend:$IMAGE_TAG -f expense/frontend/Dockerfile expense/frontend
+          docker build -t frontend:$IMAGE_TAG -f expense/frontend/Dockerfile expense/frontend
 
       # ----------------------------
-    
       # BUILD BACKEND
       # ----------------------------
       - name: Build Backend Image
         run: |
-          #docker build -t webapp-backend:$IMAGE_TAG ./backend
-          docker build -t webapp-backend:$IMAGE_TAG -f expense/backend/Dockerfile expense/backend
+          docker build -t backend:$IMAGE_TAG -f expense/backend/Dockerfile expense/backend
 
       # ----------------------------
-      # TAG FRONTEND IMAGE
+      # TAG IMAGES
       # ----------------------------
-      - name: Tag Frontend Image
+      - name: Tag Images
         run: |
-          docker tag webapp-frontend:$IMAGE_TAG $ECR_URI:$IMAGE_TAG-frontend
-
-      # ----------------------------
-      # TAG BACKEND IMAGE
-      # ----------------------------
-      - name: Tag Backend Image
-        run: |
-          docker tag webapp-backend:$IMAGE_TAG $ECR_URI:$IMAGE_TAG-backend
+          docker tag frontend:$IMAGE_TAG $ECR_URI:frontend-$IMAGE_TAG
+          docker tag backend:$IMAGE_TAG $ECR_URI:backend-$IMAGE_TAG
 
       # ----------------------------
       # PUSH IMAGES
       # ----------------------------
       - name: Push Images
         run: |
-          docker push $ECR_URI:$IMAGE_TAG-frontend
-          docker push $ECR_URI:$IMAGE_TAG-backend
+          docker push $ECR_URI:frontend-$IMAGE_TAG
+          docker push $ECR_URI:backend-$IMAGE_TAG
 
       # ----------------------------
-      # UPDATE TASK DEFINITION
+      # UPDATE ECS TASK DEFINITION
       # ----------------------------
-      - name: Register new Task Definition
-        id: taskdef
+      - name: Update Task Definition
         run: |
           set -e
 
-          FRONTEND_IMAGE="$ECR_URI:$IMAGE_TAG-frontend"
-          BACKEND_IMAGE="$ECR_URI:$IMAGE_TAG-backend"
+          FRONTEND_IMAGE="$ECR_URI:frontend-$IMAGE_TAG"
+          BACKEND_IMAGE="$ECR_URI:backend-$IMAGE_TAG"
 
-          TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition webapp-task-dev)
+          aws ecs describe-task-definition \
+            --task-definition webapp-task-dev \
+            --query taskDefinition > task-def.json
 
-          echo "$TASK_DEF" | jq --arg FE "$FRONTEND_IMAGE" --arg BE "$BACKEND_IMAGE" '
-            .taskDefinition
-            | .containerDefinitions[0].image = $FE
-            | .containerDefinitions[1].image = $BE
+          cat task-def.json | jq --arg FE "$FRONTEND_IMAGE" --arg BE "$BACKEND_IMAGE" '
+            .containerDefinitions |= map(
+              if .name == "frontend" then .image = $FE
+              elif .name == "backend" then .image = $BE
+              else .
+              end
+            )
             | del(
-                .taskDefinitionArn,
-                .revision,
-                .status,
-                .requiresAttributes,
-                .compatibilities,
-                .registeredAt,
-                .registeredBy
-              )
+              .taskDefinitionArn,
+              .revision,
+              .status,
+              .requiresAttributes,
+              .compatibilities,
+              .registeredAt,
+              .registeredBy
+            )
           ' > new-task-def.json
 
           TASK_DEF_ARN=$(aws ecs register-task-definition \
@@ -111,7 +118,7 @@ jobs:
           echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
 
       # ----------------------------
-      # DEPLOY
+      # DEPLOY TO ECS
       # ----------------------------
       - name: Deploy to ECS
         run: |
